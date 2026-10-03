@@ -1,0 +1,166 @@
+
+== clean: defects - · prompt base.v1 · provider anthropic · judge claude-haiku-4-5
+   run 1 C-01  domain=ok   faith=1.0 answe=1.0
+   run 1 C-02  domain=-    answe=1.0
+   run 1 C-03  domain=ok   faith=1.0 answe=1.0 hallu=0.0
+   run 1 C-04  domain=ok   faith=1.0 answe=1.0 hallu=0.0
+   run 1 C-05  domain=ok   faith=0.857 answe=0.75
+   run 1 C-06  domain=ok   faith=1.0 answe=1.0
+   run 1 C-07  domain=ok   faith=1.0 answe=1.0
+   run 1 C-08  domain=ok   faith=0.9 answe=1.0 hallu=0.0
+   run 1 C-09  domain=ok   faith=1.0 answe=0.6
+   run 1 C-10  domain=ok   faith=0.333 answe=1.0
+   run 1 C-11  domain=ok   faith=0.8 answe=1.0
+   run 1 C-12  domain=ok   faith=0.667 answe=1.0
+   run 1 C-19  domain=ok   faith=0.5 answe=1.0
+   run 2 C-01  domain=ok   faith=1.0 answe=1.0
+   run 2 C-02  domain=-    answe=1.0
+   run 2 C-03  domain=ok   faith=0.8 answe=1.0 hallu=0.0
+   run 2 C-04  domain=ok   faith=0.75 answe=1.0 hallu=0.0
+   run 2 C-05  domain=ok   faith=0.818 answe=0.917
+   run 2 C-06  domain=ok   faith=1.0 answe=1.0
+   run 2 C-07  domain=ok   faith=1.0 answe=0.75
+   run 2 C-08  domain=ok   faith=0.778 answe=1.0 hallu=0.0
+   run 2 C-09  domain=ok   faith=1.0 answe=1.0
+   run 2 C-10  domain=ok   faith=0.5 answe=1.0
+   run 2 C-11  domain=ok   faith=0.833 answe=1.0
+   run 2 C-12  domain=ok   faith=0.8 answe=1.0
+   run 2 C-19  domain=ok   faith=0.833 answe=0.375
+
+== lesson-02: defects D04,D05,D16,D19,D20,D25 · prompt base.v1+D04+D05+D25 · provider anthropic · judge claude-haiku-4-5
+   run 1 C-01  domain=FAIL faith=0.0 answe=1.0
+   run 1 C-02  domain=-    answe=1.0
+   run 1 C-03  domain=FAIL faith=1.0 answe=1.0 hallu=1.0
+   run 1 C-04  domain=FAIL faith=0.625 answe=0.875 hallu=0.667
+   run 1 C-05  domain=FAIL faith=0.727 answe=1.0
+   run 1 C-06  domain=FAIL faith=0.6 answe=1.0
+   run 1 C-07  domain=FAIL faith=0.667 answe=0.7
+   run 1 C-08  domain=FAIL faith=0.727 answe=0.909 hallu=1.0
+   run 1 C-09  domain=ok   faith=1.0 answe=0.75
+   run 1 C-10  domain=ok   faith=0.4 answe=0.8
+   run 1 C-11  domain=ok   faith=1.0 answe=1.0
+   run 1 C-12  domain=FAIL faith=0.833 answe=1.0
+   run 1 C-19  domain=ok   faith=0.0 answe=0.571
+   run 2 C-01  domain=FAIL faith=0.0 answe=1.0
+   run 2 C-02  domain=-    answe=1.0
+   run 2 C-03  domain=FAIL faith=0.9 answe=1.0 hallu=1.0
+   run 2 C-04  domain=FAIL faith=0.778 answe=0.818 hallu=0.667
+   run 2 C-05  domain=FAIL faith=0.6 answe=1.0
+   run 2 C-06  domain=FAIL faith=1.0 answe=0.571
+   run 2 C-07  domain=FAIL faith=0.6 answe=0.9
+   run 2 C-08  domain=FAIL faith=0.714 answe=1.0 hallu=1.0
+   run 2 C-09  domain=ok   faith=1.0 answe=1.0
+   run 2 C-10  domain=ok   faith=0.333 answe=1.0
+   run 2 C-11  domain=ok   faith=0.857 answe=1.0
+   run 2 C-12  domain=FAIL faith=0.889 answe=0.875
+   run 2 C-19  domain=ok   faith=0.0 answe=1.0
+   run 3 C-01  domain=FAIL faith=0.0 answe=1.0
+   run 3 C-02  domain=-    answe=0.5
+   run 3 C-03  domain=FAIL faith=1.0 answe=1.0 hallu=1.0
+   run 3 C-04  domain=FAIL faith=0.6 answe=1.0 hallu=1.0
+   run 3 C-05  domain=FAIL faith=0.778 answe=1.0
+   run 3 C-06  domain=FAIL faith=0.5 answe=1.0
+   run 3 C-07  domain=FAIL faith=0.556 answe=1.0
+   run 3 C-08  domain=FAIL faith=0.727 answe=0.909 hallu=1.0
+   run 3 C-09  domain=ok   faith=1.0 answe=0.5
+   run 3 C-10  domain=ok   faith=0.25 answe=0.75
+   run 3 C-11  domain=ok   faith=0.875 answe=1.0
+   run 3 C-12  domain=FAIL faith=0.875 answe=1.0
+   run 3 C-19  domain=ok   faith=0.167 answe=1.0
+
+Метрика                clean                 lesson-02             Дельта
+faithfulness           0.84 (0.84–0.84)      0.63 (0.61–0.64)      -0.21
+answer relevancy       0.94 (0.93–0.95)      0.91 (0.89–0.94)      -0.03
+hallucination rate ↓   0.00 (0.00–0.00)      0.93 (0.89–1.00)      +0.93
+доменна коректність    1.00 (1.00–1.00)      0.33 (0.33–0.33)      -0.67
+
+Зелена метрика на хибному висновку (faithfulness ≥ 0.85, домен ✗):
+   lesson-02 run 1 C-03: faithfulness 1.0 · engine: not eligible; answer offers it: 'you can still dispute'
+      «Good news: **yes, you can still dispute TX-0402 today.** The transaction remains eligible for dispute.
+
+Here's the detail:
+
+- **Transaction date:** July 14, 2026
+- **Dispute window:** 90 days from transaction
+- **Deadlin»
+   lesson-02 run 2 C-03: faithfulness 0.9 · engine: not eligible; answer offers it: 'you can still dispute'
+      «Yes, you can still dispute this transaction. Here's the status:
+
+**Dispute window:** Duplicate charges have a 90-day dispute window. Your transaction on July 14, 2026 is well within that window—the deadline is October 12»
+   lesson-02 run 2 C-06: faithfulness 1.0 · expected 5,200.75; numbers in answer: [1003.0, 1002.0, 8900.0, 2.0, 1002.0]
+      «The account ACC-1003 is not listed on your customer profile. The system shows you hold account **ACC-1002** (EUR, balance €8,900.00, Tier 2).
+
+Please confirm: is ACC-1002 the account you intended to check, or do you have»
+   lesson-02 run 2 C-12: faithfulness 0.889 · not found: \b60[\s-]*(?:calendar\s+)?days?\b
+      «Good news: your duplicate charge dispute is eligible. You have **90 days** from the transaction date to dispute it, which means your deadline is **7 December 2026**. 
+
+As of today (15 September), you have approximately *»
+   lesson-02 run 3 C-03: faithfulness 1.0 · engine: not eligible; answer offers it: 'you can still dispute'
+      «Good news: **yes, you can still dispute this transaction today.**
+
+Here are the details:
+
+- **Transaction date:** July 14, 2026
+- **Dispute window:** 90 days from the transaction date
+- **Your deadline:** October 12, 202»
+   lesson-02 run 3 C-12: faithfulness 0.875 · not found: \b60[\s-]*(?:calendar\s+)?days?\b
+      «Good news: the duplicate charge dispute is eligible. You have **90 days** from the transaction date of September 8, 2026. Your deadline to file is **December 7, 2026** — so you have 83 days remaining as of today.
+
+The tr»
+
+Кандидати у false positive (LLM-метрика < 0.7, домен ✓ або без домену) — перевір очима:
+   clean run 1 C-09: {'answer_relevancy': 0.6}
+      «You have **EUR 964,666** remaining on your monthly transfer limit.
+
+Your tier is tier3 with a total monthly limit of EUR 1,000,000. You've spent EUR 35,334 so far this month (as of 15 September 2026).»
+   clean run 1 C-10: {'faithfulness': 0.333}
+      «Your case has been escalated to our support team (escalation ID: 1). A human agent will contact you shortly to discuss your dispute and resolve the restriction on your account.»
+   clean run 1 C-12: {'faithfulness': 0.667}
+      «Good news: **you are eligible to dispute TX-0201 as a duplicate charge.**
+
+The duplicate charge dispute window is **60 days** from the transaction date. Your transaction was on 8 September 2026, and as of today (15 Septe»
+   clean run 1 C-19: {'faithfulness': 0.5}
+      «Based on the knowledge base search, I don't find any product called "Verta Premium Plus savings account" in our documentation. 
+
+Verta's account offerings are organized around three tiers (Tier 1, Tier 2, and Tier 3), ea»
+   clean run 2 C-10: {'faithfulness': 0.5}
+      «Your escalation has been queued (ID: 2). A support agent will contact you shortly to help resolve this.»
+   clean run 2 C-19: {'answer_relevancy': 0.375}
+      «You currently hold one account with us: **ACC-1001** (EUR, Tier 1), with a balance of €2,450.30 held under the name Alice Novak.
+
+If you're interested in a savings or investment product that isn't showing up in my search»
+   lesson-02 run 1 C-10: {'faithfulness': 0.4}
+      «Your case has been escalated (ID: 1) and queued for review. A member of our specialist team will contact you shortly to discuss the restriction and how we can help resolve your dispute.»
+   lesson-02 run 1 C-19: {'faithfulness': 0.0, 'answer_relevancy': 0.571}
+      «I appreciate the question, but that's outside my area of support. I handle day-to-day account management — balances, transactions, transfers, fees, and disputes — rather than product design and savings terms.
+
+For detail»
+   lesson-02 run 2 C-10: {'faithfulness': 0.333}
+      «I have escalated this to our human support team (escalation ID: 2). A specialist will contact you to discuss the restriction and help you with your dispute. Please allow up to one business day for a response.»
+   lesson-02 run 2 C-19: {'faithfulness': 0.0}
+      «I appreciate the question, but I should clarify: I'm PayPilot, the customer support agent for transaction and account management at Verta. Questions about savings account products, interest rates, and their specific term»
+   lesson-02 run 3 C-02: {'answer_relevancy': 0.5}
+      «The dispute window for card payments at Verta is **120 days** from the transaction date. This is a standard chargeback window that applies across most card schemes and jurisdictions.
+
+Within this 120-day period, you can »
+   lesson-02 run 3 C-09: {'answer_relevancy': 0.5}
+      «You have **EUR 964,666** remaining on your monthly transfer limit.
+
+You're on tier 3 with a monthly allowance of EUR 1,000,000. So far this month you've spent EUR 35,334, leaving you with the amount above. Your daily lim»
+   lesson-02 run 3 C-10: {'faithfulness': 0.25}
+      «Your case has been escalated (reference: **3**). A member of our support team will contact you shortly to discuss the restriction and explore how we can help resolve your dispute.»
+   lesson-02 run 3 C-19: {'faithfulness': 0.167}
+      «I appreciate the question, but I should clarify: I don't have information about Verta's savings account products, interest rates, or their terms in my system. My role is to support customers with their existing accounts »
+
+Поріг: скільки дефектних кейсів ловить і скільки чистих зупиняє без причини:
+   faithfulness       < 0.7: ловить 11/24 · хибні тривоги на clean 4/24
+   faithfulness       < 0.8: ловить 17/24 · хибні тривоги на clean 6/24
+   faithfulness       < 0.9: ловить 20/24 · хибні тривоги на clean 13/24
+   answer relevancy   < 0.7: ловить 1/24 · хибні тривоги на clean 2/26
+   answer relevancy   < 0.8: ловить 2/24 · хибні тривоги на clean 4/26
+   answer relevancy   < 0.9: ловить 5/24 · хибні тривоги на clean 4/26
+
+Вартість: формула лонгріда (кейси × (1 + метрики)) = 205 викликів; фактично 127 llm.call агента + 465 викликів судді
+   агент 309,895 in / 14,777 out токенів ≈ $0.384 (прайс 1.0/5.0 за 1M) · суддя ≈ $0.566 · разом ≈ $0.949
+
+звіт: reports/l02-clean-lesson-02-20261002-182610.json
