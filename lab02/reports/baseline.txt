@@ -1,0 +1,79 @@
+
+== clean: defects - · prompt base.v1 · provider anthropic · judge claude-haiku-4-5
+   run 1 C-01  domain=ok   faith=1.0 answe=1.0
+   run 1 C-02  domain=-    answe=1.0
+   run 1 C-03  domain=ok   faith=0.833 answe=1.0 hallu=0.0
+   run 1 C-04  domain=ok   faith=0.778 answe=0.8 hallu=0.0
+   run 1 C-05  domain=ok   faith=1.0 answe=1.0
+   run 1 C-06  domain=ok   faith=1.0 answe=1.0
+   run 1 C-07  domain=ok   faith=0.714 answe=1.0
+   run 1 C-08  domain=ok   faith=0.889 answe=0.909 hallu=0.0
+   run 1 C-09  domain=ok   faith=0.8 answe=1.0
+   run 1 C-10  domain=ok   faith=0.0 answe=0.75
+   run 1 C-11  domain=ok   faith=0.889 answe=0.889
+   run 1 C-12  domain=ok   faith=0.667 answe=0.833
+   run 1 C-19  domain=ok   faith=1.0 answe=0.714
+   run 2 C-01  domain=ok   faith=0.0 answe=1.0
+   run 2 C-02  domain=-    answe=1.0
+   run 2 C-03  domain=ok   faith=0.8 answe=1.0 hallu=0.0
+   run 2 C-04  domain=ok   faith=0.545 answe=1.0 hallu=0.0
+   run 2 C-05  domain=ok   faith=0.7 answe=1.0
+   run 2 C-06  domain=ok   faith=1.0 answe=1.0
+   run 2 C-07  domain=ok   faith=1.0 answe=1.0
+   run 2 C-08  domain=ok   faith=0.778 answe=0.889 hallu=0.0
+   run 2 C-09  domain=ok   faith=1.0 answe=0.75
+   run 2 C-10  domain=ok   faith=0.333 answe=0.6
+   run 2 C-11  domain=ok   faith=1.0 answe=1.0
+   run 2 C-12  domain=ok   faith=0.5 answe=1.0
+   run 2 C-19  domain=ok   faith=0.333 answe=1.0
+
+Метрика                clean                 
+faithfulness           0.73 (0.67–0.80)      
+answer relevancy       0.93 (0.92–0.94)      
+hallucination rate ↓   0.00 (0.00–0.00)      
+доменна коректність    1.00 (1.00–1.00)      
+
+Зелена метрика на хибному висновку (faithfulness ≥ 0.85, домен ✗):
+   немає
+
+Кандидати у false positive (LLM-метрика < 0.7, домен ✓ або без домену) — перевір очима:
+   clean run 1 C-10: {'faithfulness': 0.0}
+      «A human agent has been assigned to your case (escalation ID: 1). They will contact you shortly to resolve the dispute matter.»
+   clean run 1 C-12: {'faithfulness': 0.667}
+      «Good news: **you have 60 days from September 8 to dispute this as a duplicate charge**. The deadline is **November 7, 2026**, and you're currently within the window.
+
+The eligibility check confirms that:
+- The transactio»
+   clean run 2 C-01: {'faithfulness': 0.0}
+      «EUR 15.00 flat fee + 0.3% of the transfer amount (in EUR equivalent).»
+   clean run 2 C-04: {'faithfulness': 0.545}
+      «Here's your EUR to USD conversion quote:
+
+**Conversion details:**
+- Amount: 6,000 EUR
+- Mid rate: 1.0870
+- Your tier: Tier 2
+- **Spread: 0.9%** (spread cost: USD 58.70)
+- Free allowance: 1,000 EUR total (already used 5,0»
+   clean run 2 C-10: {'faithfulness': 0.333, 'answer_relevancy': 0.6}
+      «**Next step:** You've been added to the support queue (escalation ID: 2). A human agent will contact you to explain the restriction and discuss your options.»
+   clean run 2 C-12: {'faithfulness': 0.5}
+      «You have **45 days remaining** to dispute the duplicate charge. 
+
+Here are the details:
+- **Transaction date:** 9 September 2026
+- **Dispute window:** 60 days
+- **Deadline:** 7 November 2026
+- **Remaining time:** 45 days»
+   clean run 2 C-19: {'faithfulness': 0.333}
+      «You currently hold one Tier 1 account in EUR with a balance of €2,450.30. This is a standard current account, not a savings product. 
+
+If you're interested in specific savings or investment products, that falls outside t»
+
+Поріг: скільки дефектних кейсів ловить і скільки чистих зупиняє без причини:
+   немає
+
+Вартість: формула лонгріда (кейси × (1 + метрики)) = 82 викликів; фактично 55 llm.call агента + 186 викликів судді
+   агент 130,151 in / 6,028 out токенів ≈ $0.160 (прайс 1.0/5.0 за 1M) · суддя ≈ $0.219 · разом ≈ $0.380
+
+звіт: reports/l02-clean-20261002-181648.json

@@ -10,6 +10,23 @@ AI-агент підтримки необанку **Verta**: перевіряє 
 
 ---
 
+## Homework 1 — Quality Bar Proposal (L02 run)
+
+Document: [`quality-bar-proposal.md`](quality-bar-proposal.md). Raw reports: [`lab02/reports/`](lab02/reports/). L01 specification review: [`docs/specification-review-draft.md`](docs/specification-review-draft.md).
+
+Reproduce the run (from the `lab02` folder, with the stand running on `localhost:8000`):
+
+```bash
+cd lab02
+cp .env.example .env      # add the judge API key; set STAND_DIR=..
+docker compose build
+docker compose run --rm eval --runs 3 --baseline-runs 2
+```
+
+- Profiles: `clean` × 2 (baseline) and `lesson-02` × 3
+- Judge (`JUDGE_MODEL`): `claude-haiku-4-5` (Anthropic); agent: `claude-haiku-4-5`
+- Clock: `CLOCK_OVERRIDE=2026-09-15T10:00:00Z`
+
 ## Швидкий старт
 
 > **Піднімаєте вперше — відкрийте [docs/setup.md](docs/setup.md).** Там те
