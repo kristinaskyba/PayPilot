@@ -5,7 +5,9 @@ Put `golden.jsonl` into `l03/sets/` and `generate_golden.py` into `l03/` (the co
 
     docker compose run --rm eval --set golden --profile clean
 
-`set_hash`: 0cdf2f682dad
+`set_hash`: 5a06db60ff78
+
+Cost of a run (from the stand's traces, right after the run): `python3 cost_from_traces.py 29`
 
 ## Скарги
 | Скарга | Кейс | Клієнт / операція | Оракул |
@@ -32,11 +34,11 @@ Also (C-03): TX-0402 is 63 days old on 15 Sep, outside the 60-day window, but TX
 ## Прогони
 | Прогін | Профіль | Результат | Звіт |
 | --- | --- | --- | --- |
-| Baseline | `clean` | 29/29 | `reports/golden-clean-20261009T174227.json` |
-| Дефектна система | `lesson-03` | 14/29 | `reports/golden-lesson-03-20261009T174405.json` |
-| Зміна промпту | `clean` + рядок | 28/29 | `reports/golden-clean-20261009T175055.json` |
+| Baseline | `clean` | 29/29 | `reports/golden-clean-20261012T101635.json` |
+| Дефектна система | `lesson-03` | 14/29 | `reports/golden-lesson-03-20261012T102346.json` |
+| Зміна промпту | `clean` + рядок | 25/29 | `reports/golden-clean-20261012T111036.json` |
 
-All three reports have the same `set_hash` 0cdf2f682dad, so they are comparable.
+All three reports have the same `set_hash` 5a06db60ff78, so they are comparable. Cases with `gate: release` (the 5 human tone cases) are not part of the run, so M is 29, not 34. Runs were made on the stand updated on 12 Oct (ADR 0001, model claude-haiku-5-5). The dispute cases got a `customer_id` for that reason; the earlier reports from 9 Oct (old stand, hash 0cdf2f682dad) were replaced. Each case ran once.
 
 Line in the prompt: `Never use the % sign. Always write the word "percent" instead.`
 
@@ -45,16 +47,15 @@ I expect exactly 4 of the 29 daily cases to fail: FX-003-S, FX-007-S and FX-009-
 
 Round 1 prediction (superseded after the mentor's feedback: it named no case ids): "I expect a few of the 29 daily cases (1-5) to fail, but I can't say which ones." The prompt line then was: `Always begin your answer with a short apology.`
 
-Коміт із прогнозом: 9bfcfed ("docs: lab 03 prediction before prompt-change run", committed before the third run)
+Commit with the prediction: `df337ac` (11:06:41 UTC, pushed before the third run, which ran at 11:10:36 UTC).
 
-Що впало (prompt change): FX-003-S (L3, contains) - '0.9%' was not in the answer. Control check: the same case with the original prompt, run alone, passes (1/1). With one run each, this points to the apology line as the cause but does not prove it.
+What failed: FX-003-S, FX-007-S, FX-009-S, FX-011-S (L3, each looks for "0.9%" or "1.5%" in the answer).
+Divergence from the prediction: none. Exactly the 4 predicted cases failed and the other 25 passed. Caveat: one run, so I cannot say that the model would follow the line in every run.
 
-Розбіжність із прогнозом: I predicted 1-5 failures; I got 1, at the low end of my range. My claim that numeric (L2) and "must not say" (L4) checks would still pass held. I did not predict that a wording check (L3) would be the one to fail: the apology line changed how the answer is phrased, so the exact text the check looks for disappeared while the number stayed correct. The set sees a prompt change only through this one check and cannot see tone itself (the 5 tone cases are in the release gate).
-
-Дефекти (lesson-03 run, 15 of 29 cases failed):
-- D19 (wrong dispute window): caught by DIS-002-N, DIS-006
-- D20 (wrong tier spread): caught by FX-002, FX-003, FX-005 (also FX-004, FX-003-S)
-- D21 (spread on part of the amount): caught by FX-007, FX-007-S, FX-009, FX-009-S, FX-011, FX-011-S
-- D22 (daily limit given as monthly): caught by LIM-003
-- D26 (compliance hold ignored): caught by DIS-007
-Missed: none of the five.
+Defects of profile `lesson-03` (D19, D20, D21, D22, D26), 15 of 29 cases failed:
+- caught: D19 (wrong dispute window) → DIS-001, DIS-006, DIS-C12
+- caught: D20 (wrong tier spread) → FX-002, FX-003, FX-005 (also FX-004, FX-003-S)
+- caught: D21 (spread on part of the amount) → FX-007, FX-007-S, FX-009, FX-011, FX-011-S
+- caught: D22 (daily limit given as monthly) → LIM-003
+- caught: D26 (compliance hold ignored) → DIS-007
+- missed: none of the five. Note: DIS-002-N, which caught D19 on the old stand, passed this time (the new model words the answer differently), but D19 is still caught by three other cases.
