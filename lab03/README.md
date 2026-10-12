@@ -38,9 +38,12 @@ Also (C-03): TX-0402 is 63 days old on 15 Sep, outside the 60-day window, but TX
 
 All three reports have the same `set_hash` 0cdf2f682dad, so they are comparable.
 
-Рядок у промпті: `Always begin your answer with a short apology.`
+Line in the prompt: `Never use the % sign. Always write the word "percent" instead.`
 
-Прогноз до прогону: I expect a few of the 29 daily cases (1-5) to fail, but I can't say which ones. The numeric checks (e.g. FX-004) and the "must not say" checks (e.g. DIS-002-N) should still pass, because the number and the key words are still in the answer. The 5 human tone cases are in the release gate, so this run does not include them.
+Prediction before the run (round 2, written after the mentor's feedback and before the third run):
+I expect exactly 4 of the 29 daily cases to fail: FX-003-S, FX-007-S and FX-009-S (each looks for the text "0.9%" in the answer) and FX-011-S (looks for "1.5%"). The bot will write "percent" instead of "%", so the text check will not find the string, even though the answer is still correct. The other 25 should pass: the 13 cases that read the tool result (FX-002 to FX-011, LIM-003, DIS-006, DIS-007) do not depend on wording, and the "must not say" checks (FX-006-S, FX-008-S, FX-010-S) can only get easier to pass without "%". Risk: the model may not follow the line in every answer, so I may see fewer than 4 failures.
+
+Round 1 prediction (superseded after the mentor's feedback: it named no case ids): "I expect a few of the 29 daily cases (1-5) to fail, but I can't say which ones." The prompt line then was: `Always begin your answer with a short apology.`
 
 Коміт із прогнозом: 9bfcfed ("docs: lab 03 prediction before prompt-change run", committed before the third run)
 
