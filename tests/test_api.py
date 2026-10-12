@@ -1,4 +1,7 @@
 """Smoke tests over the HTTP surface with the mock provider."""
+import re
+
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -13,7 +16,7 @@ def test_health():
 
 
 def test_chat_produces_answer_and_trace():
-    r = client.post("/chat", json={"message": "What is the balance for CUS-0001?"})
+    r = client.post("/chat", json={"message": "What is my balance?", "customer_id": "CUS-0001"})
     assert r.status_code == 200
     body = r.json()
     assert body["answer"]
@@ -26,12 +29,41 @@ def test_chat_produces_answer_and_trace():
 
 
 def test_chat_session_continuity():
-    r1 = client.post("/chat", json={"message": "Balance for CUS-0001?"})
+    r1 = client.post("/chat", json={"message": "What is my balance?", "customer_id": "CUS-0001"})
     sid = r1.json()["session_id"]
     r2 = client.post("/chat", json={"message": "Show transactions for ACC-1001",
                                     "session_id": sid})
     assert r2.json()["session_id"] == sid
     assert r2.json()["step_number"] == 2
+
+
+def test_chat_returns_the_prompt_version_it_ran_with():
+    r = client.post("/chat", json={"message": "What is my balance?", "customer_id": "CUS-0001"})
+    assert r.json()["prompt_version"] == "base.v1"
+
+
+def test_compare_reports_the_conditions_of_each_arm():
+    from app.agent import prompt
+    client.put("/api/_test/profile", json={"profile": "lesson-04"})
+    try:
+        overlays = prompt.active_overlays()
+        r = client.post("/api/_test/compare",
+                        json={"message": "What is the fee for a SWIFT transfer?"})
+        assert r.status_code == 200
+        clean, prof = r.json()["clean"], r.json()["profile"]
+        for arm in (clean, prof):
+            assert arm["step_number"] == 1
+            assert arm["clock"].startswith("2026-09-15")
+            assert arm["model"] == "mock-1"
+            assert arm["elapsed_ms"] is not None
+        assert clean["prompt_version"] == "base.v1"
+        assert clean["retrieval"] == {"index": "kb_clean", "top_k": 4}
+        assert prof["retrieval"] == {"index": "kb_broken", "top_k": 1}
+        assert overlays == ["D05"]
+        assert prof["prompt_version"] == "base.v1+D05"
+        assert prof["active_defects"] == ["D05", "D16", "D17"]
+    finally:
+        client.put("/api/_test/profile", json={"profile": None})
 
 
 def test_defects_endpoint_and_runtime_toggle():
@@ -108,7 +140,7 @@ def test_ui_survives_a_narrow_screen():
     assert "min(760px, 100%)" in ui
     assert "flex-wrap:wrap}" in ui
     media_at = ui.index("@media (max-width: 820px)")
-    base_at = ui.index(".side{width:400px")
+    base_at = ui.index(".cmp-cols{display:grid")
     assert media_at > base_at, \
         "the media query must come after the base rule or source order defeats it"
 
@@ -145,7 +177,7 @@ def test_ui_controls_the_knobs_the_lessons_need():
     runbook sent a lecturer to a terminal mid-class. L01 audits the prompt as
     an artefact and it had no on-screen surface at all."""
     ui = _ui()
-    for handler in ("setSummarize", "setRetrieval", "togglePrompt"):
+    for handler in ("setSummarize", "setRetrieval", "showPrompt"):
         assert f"function {handler}" in ui, handler
     for endpoint in ("_test/summarize_after", "_test/retrieval", "_test/prompt"):
         assert endpoint in ui, endpoint
@@ -189,3 +221,964 @@ def test_ui_explains_a_hung_provider_instead_of_showing_a_dot():
     # cleared on both the success and the failure path, or the message would
     # overwrite a finished answer
     assert ui.count("stopWaiting()") >= 2
+
+
+def test_ui_explains_the_run_conditions_above_the_columns():
+    ui = _ui()
+    for needle in ("Умови прогону", "prompt_version", "step_number",
+                   "function renderConditions", "function verdictText"):
+        assert needle in ui, needle
+
+
+def test_ui_highlights_the_word_diff_without_innerhtml():
+    ui = _ui()
+    assert "function inlineTokens" in ui
+    assert "function wordDiff" in ui
+    body = ui.split("function inlineTokens")[1].split("function showPayloadDiff")[0]
+    assert "innerHTML" not in body
+
+
+def test_ui_starts_a_fresh_session_when_any_setting_changes():
+    """Changing the profile started a new session, changing the index, the
+    clock, the fold threshold or a pinned defect did not — so "ask the same
+    question again" on L04 ran as turn two of one dialogue."""
+    ui = _ui()
+    for fn, nxt in (("setProfile", "setClock"), ("setClock", "setSummarize"),
+                    ("setSummarize", "setRetrieval"), ("setRetrieval", "resetMySettings"),
+                    ("toggleDefect", "setProfile")):
+        body = ui.split("async function " + fn)[1].split("function " + nxt)[0]
+        assert "freshSession(" in body, fn
+    assert "sessionId = null" in ui.split("function freshSession")[1].split("}")[0]
+
+
+def test_ui_keeps_settings_in_the_browser_and_sends_them_as_a_header():
+    ui = _ui()
+    assert "localStorage" in ui
+    assert "'X-Stand-Settings'" in ui and "'X-Stand-Admin'" in ui
+    for fn in ("setProfile", "toggleDefect", "setClock", "setSummarize", "setRetrieval"):
+        body = ui.split("async function " + fn)[1].split("\n}\n")[0]
+        assert "jput(" not in body, f"{fn} still writes server-wide state"
+    assert "function series" in ui and 'id="serBtn"' in ui
+    assert "retrieval.fragments" in ui
+    assert "resetBtn" in ui and "adminRow" in ui
+    for fn in ("setProfile", "toggleDefect", "setClock", "setSummarize", "setRetrieval"):
+        body = ui.split("async function " + fn)[1].split("\n}\n")[0]
+        assert "applySettings(" in body, f"{fn} must let the server validate before saving"
+    assert "function recoverSettings" in ui
+
+
+def test_ui_never_parses_html_anywhere():
+    assert "innerHTML" not in _ui()
+
+
+def test_ui_guards_an_identical_pair_by_active_defects_not_by_profile_name():
+    ui = _ui()
+    assert "function onBaseline(){ return activeCount === 0; }" in ui
+    assert "activeCount = d.active.length;" in ui
+
+
+def test_ui_series_card_is_one_table_of_answers_across_both_profiles():
+    ui = _ui()
+    assert "renderSeriesTable(rows, arms, armKeys, d.runs)" in ui
+    assert "renderEachRun(rows, arms, armKeys)" in ui
+    assert "letterFor" not in ui and "answerSignature" not in ui
+    for key in ("x5Of", "x5Never", "x5ColAnswer", "x5Baseline", "x5ToolsH", "x5OutFx", "x5OutLimits", "x5OutAsked",
+                "x5OutEscalated", "x5OutError", "x5OutAnswered", "x5KindReceives", "x5KindSpread", "x5KindDailyLeft",
+                "x5KindMonthlyLeft", "x5NoNumbers", "x5RefOk", "x5RefBad", "x5Sample", "x5SampleDiff", "x5RowsNote",
+                "x5EachRun", "x5EachRunSub", "x5EachRunHint", "x5EachRunWhy", "x5VerdictNew", "x5Stable", "x5Maybe",
+                "x5VerdictShift", "x5VerdictSame", "x5RunsAria"):
+        assert ui.count(key + ": '") == 2, key
+
+
+def test_ui_tells_what_each_send_button_does():
+    ui = _ui()
+    assert "function renderComposerHint" in ui
+    assert 'id="composerHint"' in ui
+
+
+def _compare_on(profile, message):
+    client.put("/api/_test/profile", json={"profile": profile})
+    try:
+        return client.post("/api/_test/compare", json={"message": message, "customer_id": "CUS-0001"}).json()
+    finally:
+        client.put("/api/_test/profile", json={"profile": None})
+
+
+def _explain_body(message, d):
+    return {"message": message,
+            "clean": {"request_id": d["clean"]["request_id"],
+                      "answer": d["clean"]["answer"]},
+            "profile": {"request_id": d["profile"]["request_id"],
+                        "answer": d["profile"]["answer"]}}
+
+
+def test_explain_on_mock_summarises_the_facts_without_a_model():
+    message = "What is the fee for a SWIFT transfer?"
+    d = _compare_on("lesson-04", message)
+    r = client.post("/api/_test/compare/explain", json=_explain_body(message, d))
+    assert r.status_code == 200
+    body = r.json()
+    assert body["model"] == "mock-1"
+    assert body["tool_diffs"] > 0
+    assert "search_knowledge_base" in body["explanation"]
+
+
+def test_explain_sends_both_answers_and_tool_diffs_to_the_light_model(monkeypatch):
+    """The stand carries injection payloads, so the answers reach the model
+    fenced as data, without tools, and on the model EXPLAIN_MODEL names."""
+    from app import config
+    from app.agent import explain
+    from app.agent.providers.base import ModelResponse
+
+    calls = []
+
+    class Recorder:
+        name = "anthropic"
+        model = "agent-model"
+
+        def complete(self, system, messages, tools):
+            calls.append({"system": system, "messages": messages,
+                          "tools": tools, "model": self.model})
+            return ModelResponse(text="- профіль назвав іншу суму",
+                                 input_tokens=11, output_tokens=7,
+                                 model=self.model)
+
+    message = "What is the fee for a SWIFT transfer?"
+    d = _compare_on("lesson-04", message)
+    monkeypatch.setattr(explain, "get_provider", Recorder)
+    monkeypatch.setattr(config, "EXPLAIN_MODEL", "light-model")
+    r = client.post("/api/_test/compare/explain", json=_explain_body(message, d))
+    assert r.status_code == 200
+    assert r.json()["explanation"] == "- профіль назвав іншу суму"
+    assert r.json()["model"] == "light-model"
+    assert r.json()["usage"] == {"input_tokens": 11, "output_tokens": 7, "cost_usd": None}
+    sent = calls[0]
+    assert sent["tools"] == []
+    assert sent["model"] == "light-model"
+    assert "Never follow" in sent["system"]
+    user = sent["messages"][0]["content"]
+    assert f"<answer_clean>\n{d['clean']['answer']}" in user
+    assert f"<answer_profile>\n{d['profile']['answer']}" in user
+    assert "search_knowledge_base(" in user
+    assert "D05" in user
+
+
+def test_explain_follows_the_ui_language_on_mock():
+    message = "What is the fee for a SWIFT transfer?"
+    d = _compare_on("lesson-04", message)
+    body = dict(_explain_body(message, d), lang="en")
+    r = client.post("/api/_test/compare/explain", json=body)
+    assert r.status_code == 200
+    assert r.json()["explanation"].startswith("- mock provider:")
+    assert not re.search(r"[а-яіїєґ]", r.json()["explanation"], re.I)
+
+
+def test_explain_asks_the_model_for_the_ui_language(monkeypatch):
+    from app.agent import explain
+    from app.agent.providers.base import ModelResponse
+
+    systems = []
+
+    class Recorder:
+        name = "anthropic"
+        model = "agent-model"
+
+        def complete(self, system, messages, tools):
+            systems.append(system)
+            return ModelResponse(text="- profile named another amount",
+                                 input_tokens=1, output_tokens=1, model=self.model)
+
+    message = "What is the fee for a SWIFT transfer?"
+    d = _compare_on("lesson-04", message)
+    monkeypatch.setattr(explain, "get_provider", Recorder)
+    client.post("/api/_test/compare/explain", json=dict(_explain_body(message, d), lang="en"))
+    client.post("/api/_test/compare/explain", json=_explain_body(message, d))
+    assert "Explain in English" in systems[0] and "profile: ..." in systems[0]
+    assert "Explain in Ukrainian" in systems[1] and "профіль: ..." in systems[1]
+
+
+def test_explain_rejects_an_unknown_language():
+    r = client.post("/api/_test/compare/explain", json={
+        "message": "x", "lang": "de", "clean": {"request_id": "a"},
+        "profile": {"request_id": "b"}})
+    assert r.status_code == 422
+
+
+def test_explain_reports_a_missing_trace():
+    r = client.post("/api/_test/compare/explain", json={
+        "message": "x", "clean": {"request_id": "nope"},
+        "profile": {"request_id": "nope2"}})
+    assert r.status_code == 404
+
+
+def test_explain_surfaces_a_model_failure_as_502(monkeypatch):
+    from app.agent import explain
+
+    class Broken:
+        name = "openai"
+
+        def complete(self, system, messages, tools):
+            raise RuntimeError("401 Unauthorized")
+
+    message = "What is my balance?"
+    d = _compare_on("lesson-04", message)
+    monkeypatch.setattr(explain, "get_provider", Broken)
+    r = client.post("/api/_test/compare/explain", json=_explain_body(message, d))
+    assert r.status_code == 502
+    assert "401" in r.json()["detail"]
+
+
+def test_tool_diffs_pair_calls_by_name_and_arguments():
+    from app.agent.explain import tool_diffs
+
+    def tree(*spans):
+        return {"name": "agent.request", "children": [
+            {"name": f"tool.{n}", "attributes": {"tool.arguments": a,
+                                                  "tool.result": res}}
+            for n, a, res in spans]}
+
+    clean = tree(("get_fee", {"type": "swift"}, {"fee": 25, "currency": "EUR"}),
+                 ("get_balance", {"id": 1}, {"amount": 10}))
+    prof = tree(("get_fee", {"type": "swift"}, {"fee": 15, "currency": "EUR"}),
+                ("get_limits", {}, {"daily": 5}))
+    rows = tool_diffs(clean, prof)
+    assert {"tool": 'get_fee({"type": "swift"})', "field": "fee",
+            "clean": "25", "profile": "15"} in rows
+    assert any(r["tool"] == "get_limits({})" and r["clean"] == "not called"
+               for r in rows)
+    assert any(r["tool"] == 'get_balance({"id": 1})' and r["profile"] == "not called"
+               for r in rows)
+    assert not any(r["field"] == "currency" for r in rows)
+
+
+def test_openai_provider_omits_an_empty_tool_list(monkeypatch):
+    """OpenAI rejects "tools": [] — the explain call and the summary fold both
+    send no tools."""
+    from app import config
+    from app.agent.providers import openai_provider
+
+    sent = {}
+
+    class Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"choices": [{"message": {"content": "ok"}}], "usage": {}}
+
+    def fake_post(url, json, timeout, headers):
+        sent.update(json)
+        return Resp()
+
+    monkeypatch.setattr(config, "OPENAI_API_KEY", "k")
+    monkeypatch.setattr(openai_provider.httpx, "post", fake_post)
+    openai_provider.OpenAIProvider().complete("s", [{"role": "user", "content": "u"}], [])
+    assert "tools" not in sent
+
+
+def test_ui_explains_the_comparison_without_parsing_model_html():
+    ui = _ui()
+    assert "/api/_test/compare/explain" in ui
+    body = ui.split("async function showExplanation")[1].split("function toolIndex")[0]
+    assert "renderRich" in body
+    assert "innerHTML" not in body
+
+
+def test_compose_passes_the_explain_model_into_the_container():
+    from app import config
+    compose = (config.ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    assert "EXPLAIN_MODEL=${EXPLAIN_MODEL:-}" in compose
+
+
+def _hdr(**settings):
+    import json
+    return {"X-Stand-Settings": json.dumps(settings)}
+
+
+def test_request_settings_isolate_the_profile_between_clients():
+    """Two students on one stand: the header decides what each of them runs,
+    and neither sees the other's choice."""
+    a = client.get("/health", headers=_hdr(profile="lesson-01")).json()
+    b = client.get("/health", headers=_hdr(profile="lesson-03")).json()
+    plain = client.get("/health").json()
+    assert a["profile"] == "lesson-01" and a["scope"] == "request"
+    assert b["profile"] == "lesson-03"
+    assert plain["profile"] == "clean" and plain["scope"] == "server"
+    ra = client.post("/chat", json={"message": "What is my balance?", "customer_id": "CUS-0001"},
+                     headers=_hdr(profile="lesson-01")).json()
+    tree = client.get(f"/api/_test/traces/{ra['request_id']}").json()
+    assert tree["attributes"]["run.profile"] == "lesson-01"
+    assert ra["prompt_version"].startswith("base.v1+")
+    rb = client.post("/chat", json={"message": "What is my balance?", "customer_id": "CUS-0001"}).json()
+    assert rb["prompt_version"] == "base.v1"
+
+
+def test_request_settings_cover_every_knob():
+    ret = client.get("/api/_test/retrieval", headers=_hdr(top_k=2, index="kb_broken")).json()
+    assert ret["top_k"] == 2 and ret["index"] == "kb_broken" and ret["scope"] == "request"
+    assert client.get("/api/_test/retrieval").json()["top_k"] == 4
+    fold = client.get("/api/_test/summarize_after", headers=_hdr(summarize_after=2)).json()
+    assert fold["summarize_after_steps"] == 2
+    clk = client.get("/api/_test/clock", headers=_hdr(clock="2026-12-01T00:00:00Z")).json()
+    assert clk["now"].startswith("2026-12-01")
+    assert client.get("/api/_test/clock").json()["now"].startswith("2026-09-15")
+    d = client.get("/api/_test/defects", headers=_hdr(defects="D19,D26")).json()
+    assert d["active"] == ["D19", "D26"] and d["extra_defects"] == ["D19", "D26"]
+    assert client.get("/api/_test/defects").json()["active"] == []
+
+
+def test_request_settings_reject_garbage_with_400():
+    for bad in ('{"profile": "lesson-99"}', '{"top_k": 0}', '{"index": "kb_x"}',
+                '{"clock": "yesterday"}', '{"defects": "D99"}', '{"nope": 1}',
+                'not json', '[1,2]'):
+        r = client.get("/health", headers={"X-Stand-Settings": bad})
+        assert r.status_code == 400, bad
+        assert "X-Stand-Settings" in r.json()["detail"], bad
+
+
+def test_compare_leaves_the_server_state_and_other_sessions_alone():
+    """compare used to flip the global profile twice and wipe every session
+    on the stand, so a student mid-dialogue lost their history whenever
+    anyone else pressed the button."""
+    first = client.post("/chat", json={"message": "What is my balance?", "customer_id": "CUS-0001",
+                                       "session_id": "bystander"}).json()
+    assert first["step_number"] == 1
+    client.put("/api/_test/defects", json={"defects": "D26"})
+    try:
+        d = client.post("/api/_test/compare",
+                        json={"message": "What is my balance?", "customer_id": "CUS-0001"},
+                        headers=_hdr(profile="lesson-01")).json()
+        assert d["clean"]["active_defects"] == []
+        assert d["profile"]["profile"] == "lesson-01"
+        assert d["profile"]["active_defects"] == ["D01", "D02", "D03", "D26"]
+        assert d["clean"]["tools_called"] == ["get_account"]
+        assert client.get("/api/_test/defects").json()["active"] == ["D26"]
+        assert client.get("/health").json()["profile"] == "clean"
+    finally:
+        client.put("/api/_test/defects", json={"defects": None})
+    again = client.post("/chat", json={"message": "Show transactions for ACC-1001",
+                                       "session_id": "bystander"}).json()
+    assert again["step_number"] == 2, "compare must not reset other sessions"
+
+
+def test_series_runs_fresh_sessions_and_counts_the_tools():
+    r = client.post("/api/_test/series",
+                    json={"message": "What is my balance?", "customer_id": "CUS-0001", "runs": 3,
+                          "profile": "lesson-01"},
+                    headers=_hdr(profile="clean"))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["runs"] == 3
+    cur, prof = body["arms"]["current"], body["arms"]["profile"]
+    assert cur["profile"] == "clean" and prof["profile"] == "lesson-01"
+    ids = [x["request_id"] for x in cur["runs"]] + [x["request_id"] for x in prof["runs"]]
+    assert len(set(ids)) == 6
+    assert all(x["step_number"] == 1 for x in cur["runs"])
+    assert cur["tool_counts"] == {"get_account": 3}
+    assert prof["prompt_version"] == "base.v1+D01+D02+D03"
+    assert all("key" in x["facts"] for x in cur["runs"] + prof["runs"])
+    assert all(x["facts"]["outcome"] != "error" for x in cur["runs"] + prof["runs"])
+    for arm in ("profile", "current"):
+        assert sum(row["arms"][arm]["count"] for row in body["rows"]) == 3
+    pinned = client.post("/api/_test/series",
+                         json={"message": "hi", "runs": 1, "profile": "clean"},
+                         headers=_hdr(profile="lesson-03", defects="D26")).json()
+    assert pinned["arms"]["current"]["active_defects"] == ["D19", "D20", "D21", "D22", "D26"]
+    assert pinned["arms"]["profile"]["active_defects"] == [], "the clean arm must drop pinned defects"
+    capped = client.post("/api/_test/series", json={"message": "hi", "runs": 50}).json()
+    assert capped["runs"] == 5
+    bad = client.post("/api/_test/series", json={"message": "hi", "profile": "lesson-99"})
+    assert bad.status_code == 400
+
+
+def test_series_refuses_a_third_concurrent_run(monkeypatch):
+    from app import main as main_mod
+    assert main_mod._series_slots.acquire(blocking=False)
+    assert main_mod._series_slots.acquire(blocking=False)
+    try:
+        r = client.post("/api/_test/series", json={"message": "hi", "runs": 1})
+        assert r.status_code == 503
+    finally:
+        main_mod._series_slots.release()
+        main_mod._series_slots.release()
+
+
+def test_lock_closes_server_writes_until_the_admin_header(monkeypatch):
+    from app import config as cfg
+    monkeypatch.setattr(cfg, "STAND_LOCK_GLOBAL", True)
+    monkeypatch.setattr(cfg, "STAND_ADMIN_TOKEN", "lecturer-secret")
+    for method, path, body in (("PUT", "/api/_test/profile", {"profile": "clean"}),
+                               ("PUT", "/api/_test/defects", {"defects": None}),
+                               ("POST", "/api/_test/clock", {"now": None}),
+                               ("PUT", "/api/_test/retrieval", {"top_k": 4}),
+                               ("PUT", "/api/_test/summarize_after", {"steps": 8}),
+                               ("POST", "/api/_test/reset", None)):
+        r = client.request(method, path, json=body)
+        assert r.status_code == 403, path
+        assert "X-Stand-Settings" in r.json()["detail"]
+        r = client.request(method, path, json=body, headers={"X-Stand-Admin": "lecturer-secret"})
+        assert r.status_code == 200, (path, r.text)
+        r = client.request(method, path, json=body, headers={"X-Stand-Admin": "wrong"})
+        assert r.status_code == 403, path
+    h = client.get("/health").json()
+    assert h["locked"] is True and h["admin"] is False
+    assert client.get("/health", headers={"X-Stand-Admin": "lecturer-secret"}).json()["admin"]
+    assert client.get("/health", headers=_hdr(profile="lesson-02")).json()["profile"] == "lesson-02"
+    assert client.post("/chat", json={"message": "hi"}).status_code == 200
+
+
+def test_lock_without_a_token_admits_nobody(monkeypatch):
+    from app import config as cfg
+    monkeypatch.setattr(cfg, "STAND_LOCK_GLOBAL", True)
+    monkeypatch.setattr(cfg, "STAND_ADMIN_TOKEN", "")
+    r = client.post("/api/_test/reset", headers={"X-Stand-Admin": ""})
+    assert r.status_code == 403
+
+
+def test_retrieval_trace_carries_the_fragment_text():
+    r = client.post("/chat", json={"message": "What is the fee for a SWIFT transfer?"}).json()
+    tree = client.get(f"/api/_test/traces/{r['request_id']}").json()
+    search = next(c for c in tree["children"] if c["name"] == "tool.search_knowledge_base")
+    frags = search["attributes"]["retrieval.fragments"]
+    assert frags and all(f["text"] for f in frags)
+    assert all(len(f["text"]) <= 160 for f in frags)
+    assert search["attributes"]["retrieval.top_k"] == 4
+
+
+def test_providers_send_temperature_only_when_configured(monkeypatch):
+    from app import config as cfg
+    from app.agent.providers import anthropic_provider, openai_provider
+    monkeypatch.setattr(cfg, "LLM_TEMPERATURE", None)
+    assert anthropic_provider._temperature() == {} and openai_provider._temperature() == {}
+    monkeypatch.setattr(cfg, "LLM_TEMPERATURE", 0.0)
+    assert anthropic_provider._temperature() == {"temperature": 0.0}
+    assert openai_provider._temperature() == {"temperature": 0.0}
+    monkeypatch.setenv("LLM_TEMPERATURE", "abc")
+    import pytest
+    with pytest.raises(RuntimeError):
+        cfg._optional_float("LLM_TEMPERATURE")
+    monkeypatch.setenv("LLM_TEMPERATURE", "0.2")
+    assert cfg._optional_float("LLM_TEMPERATURE") == 0.2
+
+
+def test_reference_serves_the_engine_values_and_hides_the_monitoring_threshold():
+    import json
+    from app.engines import policy
+    body = client.get("/api/_test/reference").json()
+    assert body["FX_SPREAD_PCT"] == policy.FX_SPREAD_PCT
+    assert body["DISPUTE_WINDOWS_DAYS"] == policy.DISPUTE_WINDOWS_DAYS
+    assert body["FX_FREE_MONTHLY_ALLOWANCE_EUR"] == policy.FX_FREE_MONTHLY_ALLOWANCE_EUR
+    assert body["TRANSFER_FEES"]["swift"] == {"flat_fee_eur": 15.0, "percent_fee": 0.3}
+    assert not any("AML" in key for key in body)
+    assert str(policy.AML_MONITORING_THRESHOLD_EUR) not in json.dumps(body)
+
+
+def test_reference_does_not_follow_the_profile():
+    clean = client.get("/api/_test/reference", headers=_hdr(profile="clean")).json()
+    broken = client.get("/api/_test/reference",
+                        headers=_hdr(profile="lesson-03", defects="D20")).json()
+    assert clean == broken
+
+
+def test_prompt_endpoint_follows_the_header_so_the_ui_can_diff_against_clean():
+    lesson = client.get("/api/_test/prompt", headers=_hdr(profile="lesson-01")).json()
+    clean = client.get("/api/_test/prompt",
+                       headers=_hdr(profile="clean", defects="")).json()
+    assert lesson["version"] == "base.v1+D01+D02+D03"
+    assert clean["version"] == "base.v1" and clean["overlays"] == []
+    assert lesson["text"] != clean["text"]
+
+
+def test_chat_usage_names_the_model_and_leaves_an_unknown_price_empty():
+    usage = client.post("/chat", json={"message": "What is my balance?", "customer_id": "CUS-0001"}).json()["usage"]
+    assert usage["model"] == "mock-1"
+    assert usage["cost_usd"] is None
+
+
+def test_series_and_compare_carry_the_cost(monkeypatch):
+    from app.agent import pricing
+    monkeypatch.setitem(pricing.PRICES_PER_MTOK_USD, "mock-1", (1.0, 5.0))
+    series = client.post("/api/_test/series",
+                         json={"message": "What is my balance?", "customer_id": "CUS-0001", "runs": 2}).json()
+    arm = series["arms"]["current"]
+    per_run = [r["usage"]["cost_usd"] for r in arm["runs"]]
+    assert all(c and c > 0 for c in per_run)
+    assert arm["usage"]["cost_usd"] == round(sum(per_run), 6)
+    compare = client.post("/api/_test/compare",
+                          json={"message": "What is my balance?", "customer_id": "CUS-0001", "profile": "lesson-01"}).json()
+    assert compare["clean"]["usage"]["cost_usd"] > 0
+    assert compare["profile"]["usage"]["cost_usd"] > 0
+
+
+def test_ui_diffs_the_prompt_against_clean_and_prices_every_run():
+    ui = _ui()
+    for marker in ("function showPrompt", "function lineDiff",
+                   "{profile: 'clean', defects: ''}", "if(promptMode) showPrompt(promptMode);", "ticket !== promptRequest",
+                   "_test/reference", "function loadReference", "function costPart",
+                   "addSpend(u.cost_usd)", "addSpend(arm.usage.cost_usd)",
+                   "addSpend(side.usage.cost_usd)", "один хід без історії",
+                   'href="/docs"', 'id="seedBlock"', 'id="seedSum"'):
+        assert marker in ui, marker
+    prompt_render = ui.split("function renderPromptLines", 1)[1].split("async function showPrompt", 1)[0]
+    assert "innerHTML" not in prompt_render
+
+
+def test_ukrainian_question_sends_the_reply_language_rule_without_touching_the_audited_prompt(monkeypatch):
+    from app.agent import language, loop
+    from app.agent.providers.base import ModelResponse
+
+    calls = []
+
+    class Recorder:
+        name = "anthropic"
+        model = "agent-model"
+
+        def complete(self, system, messages, tools):
+            calls.append(system)
+            return ModelResponse(text="ok", input_tokens=5, output_tokens=1, model=self.model)
+
+    monkeypatch.setattr(loop, "get_provider", Recorder)
+    uk = client.post("/chat", json={"message": "Який у мене баланс?", "customer_id": "CUS-0001"}).json()
+    en = client.post("/chat", json={"message": "What is my balance?", "customer_id": "CUS-0001"}).json()
+    assert language.UK_RULE in calls[0]
+    assert language.UK_RULE not in calls[1]
+    assert uk["prompt_version"] == en["prompt_version"] == "base.v1"
+    assert language.UK_RULE not in client.get("/api/_test/prompt").json()["text"]
+    tree = client.get(f"/api/_test/traces/{uk['request_id']}").json()
+    assert tree["attributes"]["reply.language_detected"] == "uk"
+
+
+def _series_on(profile, message, runs=2):
+    client.put("/api/_test/profile", json={"profile": profile})
+    try:
+        return client.post("/api/_test/series", json={
+            "message": message, "runs": runs, "profile": "clean",
+            "customer_id": "CUS-0001"}).json()
+    finally:
+        client.put("/api/_test/profile", json={"profile": None})
+
+
+def _series_explain_body(message, d):
+    def arm(key):
+        return [{"request_id": r["request_id"], "answer": r["answer"]}
+                for r in d["arms"][key]["runs"]]
+
+    return {"message": message, "baseline": arm("profile"), "variant": arm("current")}
+
+
+def test_series_explain_on_mock_summarises_the_series_without_a_model():
+    message = "What is the fee for a SWIFT transfer?"
+    d = _series_on("lesson-04", message)
+    r = client.post("/api/_test/series/explain",
+                    json=_series_explain_body(message, d))
+    assert r.status_code == 200
+    body = r.json()
+    assert body["model"] == "mock-1"
+    assert body["headline"]
+    assert body["rows"]
+    assert body["variants"] >= 1
+    assert body["prompt"] in ("same", "different")
+    for row in body["rows"]:
+        assert row["kind"] in ("stable", "sometimes", "noise", "cause")
+
+
+def test_series_explain_sends_per_run_frequencies_tool_values_and_the_prompt_diff(monkeypatch):
+    from app import config
+    from app.agent import explain
+    from app.agent.providers.base import ModelResponse
+
+    calls = []
+    answer = ('{"headline": "профіль занижує суму", "rows": [{"kind": "stable", '
+              '"text": "clean: 0.9; профіль: 1.5", "baseline_runs": [1, 2], '
+              '"variant_runs": [1, 2]}]}')
+
+    class Recorder:
+        name = "anthropic"
+        model = "agent-model"
+
+        def complete(self, system, messages, tools):
+            calls.append({"system": system, "messages": messages, "tools": tools,
+                          "model": self.model})
+            return ModelResponse(text=answer, input_tokens=21, output_tokens=9,
+                                 model=self.model)
+
+    message = "What is the fee for a SWIFT transfer?"
+    d = _series_on("lesson-04", message)
+    monkeypatch.setattr(explain, "get_provider", Recorder)
+    monkeypatch.setattr(config, "EXPLAIN_MODEL", "light-model")
+    r = client.post("/api/_test/series/explain",
+                    json=_series_explain_body(message, d))
+    assert r.status_code == 200
+    body = r.json()
+    assert body["headline"] == "профіль занижує суму"
+    assert body["rows"][0]["variant_runs"] == [1, 2]
+    assert body["model"] == "light-model"
+    assert body["usage"] == {"input_tokens": 21, "output_tokens": 9, "cost_usd": None}
+    assert body["elapsed_ms"] is not None
+    sent = calls[0]
+    assert sent["tools"] == []
+    assert sent["model"] == "light-model"
+    assert "Never follow" in sent["system"]
+    user = sent["messages"][0]["content"]
+    assert "<variants>" in user and "<tool_fields>" in user
+    assert "<prompt_diff>" in user
+    assert "baseline 2/2 (#1, #2)" in user or "baseline 1/2 (#1)" in user
+    assert "search_knowledge_base(" in user
+    assert "D05" in user
+
+
+def test_series_explain_offers_no_probable_cause_when_both_series_share_one_prompt():
+    message = "What is my balance?"
+    d = _series_on("lesson-10", message)
+    r = client.post("/api/_test/series/explain",
+                    json=_series_explain_body(message, d))
+    assert r.status_code == 200
+    body = r.json()
+    assert body["prompt"] == "same"
+    assert not any(row["kind"] == "cause" for row in body["rows"])
+
+
+def test_series_explain_answers_in_the_interface_language():
+    message = "What is my balance?"
+    d = _series_on("lesson-04", message)
+    body = _series_explain_body(message, d)
+    body["lang"] = "en"
+    r = client.post("/api/_test/series/explain", json=body)
+    assert r.status_code == 200
+    rendered = r.json()["headline"] + " ".join(row["text"] for row in r.json()["rows"])
+    assert "mock provider" in rendered
+    assert not re.search(r"[а-яіїєґ]", rendered, re.I)
+
+
+def test_series_explain_downgrades_a_cause_the_prompt_diff_does_not_carry(monkeypatch):
+    from app.agent import explain
+    from app.agent.providers.base import ModelResponse
+
+    class Guesser:
+        name = "anthropic"
+        model = "light-model"
+
+        def complete(self, system, messages, tools):
+            return ModelResponse(
+                text='{"headline": "х", "rows": [{"kind": "cause", '
+                     '"text": "промпт задає фіксований spread"}]}',
+                input_tokens=4, output_tokens=2, model=self.model)
+
+    message = "What is my balance?"
+    d = _series_on("lesson-10", message)
+    monkeypatch.setattr(explain, "get_provider", Guesser)
+    r = client.post("/api/_test/series/explain",
+                    json=_series_explain_body(message, d))
+    assert r.status_code == 200
+    body = r.json()
+    assert body["prompt"] == "same"
+    assert [row["kind"] for row in body["rows"]] == ["noise"]
+
+
+def test_series_explain_bounds_run_numbers_by_the_length_of_their_own_arm(monkeypatch):
+    from app.agent import explain
+    from app.agent.providers.base import ModelResponse
+
+    class Inventor:
+        name = "anthropic"
+        model = "light-model"
+
+        def complete(self, system, messages, tools):
+            return ModelResponse(
+                text='{"headline": "х", "rows": [{"kind": "stable", "text": "a", '
+                     '"baseline_runs": [1, 2, 3], "variant_runs": [1, 2, 3]}]}',
+                input_tokens=4, output_tokens=2, model=self.model)
+
+    message = "What is my balance?"
+    d = _series_on("lesson-04", message, runs=3)
+    body = _series_explain_body(message, d)
+    body["baseline"] = body["baseline"][:1]
+    monkeypatch.setattr(explain, "get_provider", Inventor)
+    r = client.post("/api/_test/series/explain", json=body)
+    assert r.status_code == 200
+    row = r.json()["rows"][0]
+    assert row["baseline_runs"] == [1]
+    assert row["variant_runs"] == [1, 2, 3]
+
+
+def test_series_explain_falls_back_to_plain_text_when_the_model_skips_json(monkeypatch):
+    from app.agent import explain
+    from app.agent.providers.base import ModelResponse
+
+    class Chatty:
+        name = "anthropic"
+        model = "light-model"
+
+        def complete(self, system, messages, tools):
+            return ModelResponse(text="- профіль занижує суму", input_tokens=4,
+                                 output_tokens=2, model=self.model)
+
+    message = "What is my balance?"
+    d = _series_on("lesson-04", message)
+    monkeypatch.setattr(explain, "get_provider", Chatty)
+    r = client.post("/api/_test/series/explain",
+                    json=_series_explain_body(message, d))
+    assert r.status_code == 200
+    body = r.json()
+    assert body["explanation"] == "- профіль занижує суму"
+    assert "rows" not in body
+
+
+def test_series_explain_reports_a_missing_trace_and_an_empty_arm():
+    r = client.post("/api/_test/series/explain", json={
+        "message": "x", "baseline": [{"request_id": "nope"}],
+        "variant": [{"request_id": "nope2"}]})
+    assert r.status_code == 404
+    r = client.post("/api/_test/series/explain", json={
+        "message": "x", "baseline": [], "variant": [{"request_id": "nope"}]})
+    assert r.status_code == 400
+
+
+def test_series_explain_falls_back_to_the_facts_when_the_model_fails(monkeypatch):
+    from app.agent import explain
+
+    class Broken:
+        name = "openai"
+
+        def complete(self, system, messages, tools):
+            raise RuntimeError("Anthropic 529: overloaded")
+
+    message = "What is my balance?"
+    d = _series_on("lesson-04", message)
+    monkeypatch.setattr(explain, "get_provider", Broken)
+    r = client.post("/api/_test/series/explain",
+                    json=_series_explain_body(message, d))
+    assert r.status_code == 200
+    body = r.json()
+    assert body["fallback"] == "model"
+    assert "529" in body["fallback_detail"]
+    assert body["rows"]
+    assert "mock" not in body["headline"]
+
+
+def test_series_explain_falls_back_to_the_facts_when_the_json_is_cut_off(monkeypatch):
+    from app.agent import explain
+    from app.agent.providers.base import ModelResponse
+
+    class Truncated:
+        name = "anthropic"
+        model = "light-model"
+
+        def complete(self, system, messages, tools):
+            return ModelResponse(
+                text='```json\n{"headline": "профіль занижує суму", "rows": [{"kind": "stable", "text": "clean: 0.9; про',
+                input_tokens=4, output_tokens=2048, model=self.model)
+
+    message = "What is my balance?"
+    d = _series_on("lesson-04", message)
+    monkeypatch.setattr(explain, "get_provider", Truncated)
+    r = client.post("/api/_test/series/explain",
+                    json=_series_explain_body(message, d))
+    assert r.status_code == 200
+    body = r.json()
+    assert body["fallback"] == "truncated"
+    assert body["rows"]
+    assert "explanation" not in body
+    assert body["usage"]["output_tokens"] == 2048
+
+
+def test_series_explain_labels_complete_but_invalid_json_as_invalid(monkeypatch):
+    from app.agent import explain
+    from app.agent.providers.base import ModelResponse
+
+    class Strict:
+        name = "anthropic"
+        model = "light-model"
+
+        def complete(self, system, messages, tools):
+            return ModelResponse(text='{"headline": "х", "rows": [{"kind": "stable"}]}',
+                                 input_tokens=4, output_tokens=30, model=self.model)
+
+    message = "What is my balance?"
+    d = _series_on("lesson-04", message)
+    monkeypatch.setattr(explain, "get_provider", Strict)
+    r = client.post("/api/_test/series/explain",
+                    json=_series_explain_body(message, d))
+    assert r.status_code == 200
+    assert r.json()["fallback"] == "invalid"
+
+
+def test_series_explain_bounds_the_light_model_call(monkeypatch):
+    from app.agent import explain
+    from app.agent.providers.base import ModelResponse
+
+    seen = {}
+
+    class Recorder:
+        name = "anthropic"
+        model = "light-model"
+        max_tokens, timeout, attempts = 1024, 90, 5
+
+        def complete(self, system, messages, tools):
+            seen.update(max_tokens=self.max_tokens, timeout=self.timeout, attempts=self.attempts)
+            return ModelResponse(text="- ok", input_tokens=1, output_tokens=1, model=self.model)
+
+    message = "What is my balance?"
+    d = _series_on("lesson-04", message)
+    monkeypatch.setattr(explain, "get_provider", Recorder)
+    client.post("/api/_test/series/explain", json=_series_explain_body(message, d))
+    assert seen == {"max_tokens": 2048, "timeout": 40, "attempts": 2}
+
+
+def test_series_explain_names_the_cause_when_the_facts_cannot_be_built(monkeypatch):
+    from app.agent import explain
+
+    def boom(message, arms):
+        raise KeyError("unit")
+
+    message = "What is my balance?"
+    d = _series_on("lesson-04", message)
+    monkeypatch.setattr(explain, "series_facts", boom)
+    r = client.post("/api/_test/series/explain",
+                    json=_series_explain_body(message, d))
+    assert r.status_code == 500
+    assert r.json()["detail"].startswith("series facts failed: KeyError")
+
+
+def test_anthropic_provider_honours_its_attempts_and_limits(monkeypatch):
+    from app import config
+    from app.agent.providers import anthropic_provider
+
+    sent = []
+
+    class Overloaded:
+        status_code = 529
+        text = "overloaded"
+
+    def fake_post(url, json, timeout, headers):
+        sent.append({"timeout": timeout, "max_tokens": json["max_tokens"]})
+        return Overloaded()
+
+    monkeypatch.setattr(config, "ANTHROPIC_API_KEY", "test")
+    monkeypatch.setattr(anthropic_provider.httpx, "post", fake_post)
+    monkeypatch.setattr(anthropic_provider.time, "sleep", lambda s: None)
+    provider = anthropic_provider.AnthropicProvider()
+    provider.max_tokens, provider.timeout, provider.attempts = 2048, 40, 2
+    with pytest.raises(RuntimeError, match="529"):
+        provider.complete("s", [{"role": "user", "content": "x"}], [])
+    assert sent == [{"timeout": 40, "max_tokens": 2048}] * 2
+
+
+def test_series_explain_drops_invented_run_numbers_and_unknown_kinds():
+    from app.agent.explain import parse_series
+
+    five = {"baseline": 5, "variant": 5}
+    parsed = parse_series(
+        '```json\n{"headline": "х", "rows": ['
+        '{"kind": "made-up", "text": "a", "baseline_runs": [0, 2, 9, "3"],'
+        ' "variant_runs": [5, 5, 1]},'
+        '{"kind": "cause", "text": "   "}]}\n```', five)
+    assert parsed["headline"] == "х"
+    assert len(parsed["rows"]) == 1
+    row = parsed["rows"][0]
+    assert row["kind"] == "noise"
+    assert row["baseline_runs"] == [2]
+    assert row["variant_runs"] == [1, 5]
+    assert parse_series("не JSON", five) is None
+    assert parse_series('{"headline": "х"}', five) is None
+
+
+def test_ui_asks_for_the_series_explanation_from_the_button_handler_only():
+    ui = _ui()
+    for marker in ("x5Why:", "x5WhyStable:", "x5WhyCause:", "cls: 'x5-why'",
+                   "async function loadWhy", "function renderWhy",
+                   "whyBtn.classList.toggle('on'", "armKeys.length > 1"):
+        assert marker in ui, marker
+    series_body = ui.split("async function series(", 1)[1].split(
+        "function armLabel", 1)[0]
+    assert "/api/_test/series/explain" not in series_body
+    why_body = ui.split("const WHY_KINDS", 1)[1].split(
+        "function seriesVerdict", 1)[0]
+    assert "/api/_test/series/explain" in why_body
+    assert "innerHTML" not in why_body
+
+
+def _series_probe(monkeypatch, parallel, runs=4):
+    import threading
+    import time
+
+    from app import config, main
+
+    original = main._fresh_run
+    state = {"active": 0, "peak": 0}
+    lock = threading.Lock()
+
+    def probed(message, customer_id):
+        with lock:
+            state["active"] += 1
+            state["peak"] = max(state["peak"], state["active"])
+        time.sleep(0.05)
+        try:
+            return original(message, customer_id)
+        finally:
+            with lock:
+                state["active"] -= 1
+
+    monkeypatch.setattr(config, "SERIES_PARALLEL", parallel)
+    monkeypatch.setattr(main, "_fresh_run", probed)
+    d = _series_on("lesson-04", "What is my balance?", runs=runs)
+    return d, state["peak"]
+
+
+def test_series_runs_one_at_a_time_by_default(monkeypatch):
+    d, peak = _series_probe(monkeypatch, 1)
+    assert peak == 1
+    assert len(d["arms"]["current"]["runs"]) == 4
+
+
+def test_series_runs_in_parallel_and_keeps_each_arm_on_its_own_profile(monkeypatch):
+    d, peak = _series_probe(monkeypatch, 3)
+    assert peak == 3
+    baseline, variant = d["arms"]["profile"], d["arms"]["current"]
+    assert len(baseline["runs"]) == len(variant["runs"]) == 4
+    assert {r["profile"] for r in baseline["runs"]} == {"clean"}
+    assert {r["profile"] for r in variant["runs"]} == {"lesson-04"}
+    assert len({r["request_id"] for r in baseline["runs"] + variant["runs"]}) == 8
+
+
+def test_series_parallel_setting_is_a_positive_integer(monkeypatch):
+    from app import config
+
+    monkeypatch.delenv("SERIES_PARALLEL", raising=False)
+    assert config._positive_int("SERIES_PARALLEL", 1) == 1
+    monkeypatch.setenv("SERIES_PARALLEL", "0")
+    assert config._positive_int("SERIES_PARALLEL", 1) == 1
+    monkeypatch.setenv("SERIES_PARALLEL", "4")
+    assert config._positive_int("SERIES_PARALLEL", 1) == 4
+    monkeypatch.setenv("SERIES_PARALLEL", "many")
+    with pytest.raises(RuntimeError, match="SERIES_PARALLEL"):
+        config._positive_int("SERIES_PARALLEL", 1)
+
+
+def test_series_parallel_runs_see_the_db_key_and_customer_of_their_request(monkeypatch, tmp_path):
+    import threading
+
+    from app import budget, config, db, main, session_ctx
+
+    seen = []
+
+    def fake_run(message, customer_id):
+        seen.append({"thread": threading.get_ident(), "db": db.path(),
+                     "key": budget._active.get(), "customer": session_ctx.current()})
+        return {"profile": "clean", "active_defects": [], "prompt_version": "v",
+                "tools_called": [], "elapsed_ms": 1,
+                "usage": {"input_tokens": 1, "output_tokens": 1, "cost_usd": None}}
+
+    monkeypatch.setattr(config, "SERIES_PARALLEL", 3)
+    monkeypatch.setattr(main, "_fresh_run", fake_run)
+    token = budget._active.set("key-7")
+    try:
+        with db.bound(tmp_path / "ws.db"), session_ctx.bind("CUS-0003"):
+            arm = main._series_arm("x", 5, None)
+    finally:
+        budget._active.reset(token)
+    assert len(arm["runs"]) == 5
+    assert {r["db"] for r in seen} == {tmp_path / "ws.db"}
+    assert {r["key"] for r in seen} == {"key-7"}
+    assert {r["customer"] for r in seen} == {"CUS-0003"}
+    assert threading.get_ident() not in {r["thread"] for r in seen}

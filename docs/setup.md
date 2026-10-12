@@ -118,6 +118,11 @@ LLM_PROVIDER=anthropic
 ANTHROPIC_API_KEY=sk-ant-...ваш ключ...
 ```
 
+Ключ OpenRouter замість Anthropic теж підходить: `LLM_PROVIDER=openrouter` і
+`OPENROUTER_API_KEY=sk-or-...`. Модель за замовчуванням —
+`anthropic/claude-haiku-5.5`; іншу задають через `LLM_MODEL` у форматі
+OpenRouter (`постачальник/модель`).
+
 Три речі, на яких спотикаються найчастіше:
 
 - Файл має називатися рівно **`.env`**, а не `.env.txt`. Windows ховає
@@ -209,10 +214,11 @@ docker compose exec stand python scripts/doctor.py
   повертайтесь до кроку 3.
 
 Друга перевірка, вона ж найпереконливіша: відкрийте
-**http://localhost:8000**, напишіть у чат
+**http://localhost:8000**, виберіть клієнта **CUS-0001** (перемикач «як …» біля
+поля вводу) і напишіть у чат
 
 ```
-I am CUS-0001. What is my balance?
+What is my balance?
 ```
 
 Відповідь має прийти за кілька секунд і виглядати приблизно так:
@@ -234,6 +240,48 @@ I am CUS-0001. What is my balance?
 першого завдання.
 
 ---
+
+## 7. Спільний стенд: ключі студентів
+
+Цей розділ — для лектора, що тримає один стенд на весь потік.
+
+1. У `.env` стенду: `STAND_LOCK_GLOBAL=1`, `STAND_ADMIN_TOKEN=<секрет>`,
+   `STAND_KEYS_REQUIRED=1`. Ліміти нових ключів — `STAND_KEY_DAILY_USD`
+   (типово `1.0`) і `STAND_KEY_MONTHLY_USD` (типово `5.0`). Потім
+   `docker compose up -d`.
+2. Модель має бути в таблиці цін `app/agent/pricing.py`: з увімкненими
+   ключами стенд не стартує на моделі без ціни, а `doctor` показує
+   `student keys [FAIL]` з її назвою. Це стосується `LLM_MODEL`,
+   `EXPLAIN_MODEL` і, з роутером, `TYPESAFE_MODEL`.
+3. Видати ключі — повний ключ друкується один раз, у базі лишається лише хеш:
+
+   ```bash
+   docker compose exec stand python scripts/keys.py create --labels-file students.txt > keys.csv
+   docker compose exec stand python scripts/keys.py create --label "Олена Коваль"
+   docker compose exec stand python scripts/keys.py create --count 30
+   ```
+
+   `students.txt` — по імені на рядок; файл має лежати в контейнері
+   (`docker compose cp students.txt stand:/stand/`).
+4. Стежити і керувати:
+
+   ```bash
+   docker compose exec stand python scripts/keys.py list
+   docker compose exec stand python scripts/keys.py revoke psk_AbCdEfGh
+   docker compose exec stand python scripts/keys.py set-limits psk_AbCdEfGh --daily 2
+   ```
+
+   Те саме видно через `GET /api/_test/keys` із заголовком `X-Stand-Admin`.
+
+Ключі й облік витрат лежать в окремому файлі `data/budget.db` у томі
+`stand-data`: `POST /api/_test/reset` їх не чіпає, `docker compose down -v`
+— видаляє. Запити з `X-Stand-Admin` ключа не потребують і в облік не йдуть.
+
+З ключем студента reset і перемикання профілю, дефектів, годинника, пошуку й
+згортки діють лише для цього ключа (ADR 0003): у кожного ключа своя база
+`data/tenants/key-<id>.db`. `keys.py list` показує, чи є в ключа база і які в
+нього налаштування; `keys.py revoke` видаляє і базу, і налаштування. Лекторські
+дії з `X-Stand-Admin` діють глобально, як раніше.
 
 ## Якщо щось не працює
 
@@ -261,8 +309,9 @@ Billing**. `doctor` покаже повідомлення провайдера �
 працюють: `docker compose ps` — обидва мають бути `Up`. Якщо ні,
 `docker compose logs stand` покаже причину.
 
-**Дані виглядають зіпсованими, стенд поводиться дивно.** У панелі праворуч є
-кнопка **«Скинути стан»** — вона повертає базу до вихідного вигляду.
+**Дані виглядають зіпсованими, стенд поводиться дивно.** У «Меню › Розширені
+налаштування» (розділ «Стенд») є кнопка **«Скинути стан»** — вона повертає
+базу до вихідного вигляду.
 
 **Хочу переконатися, що стенд цілий.**
 `docker compose exec stand python scripts/ci_smoke.py` — перевіряє всі

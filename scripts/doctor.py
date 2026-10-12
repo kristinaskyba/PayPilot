@@ -43,7 +43,7 @@ def main() -> int:
     if provider == "mock":
         check("llm provider", WARN,
               "mock — free and deterministic, but probabilistic defects need "
-              "a live provider; set LLM_PROVIDER=anthropic|openai")
+              "a live provider; set LLM_PROVIDER=anthropic|openai|openrouter")
     elif provider == "anthropic":
         key = os.environ.get("ANTHROPIC_API_KEY", "")
         check("llm provider", OK if key else FAIL,
@@ -56,9 +56,16 @@ def main() -> int:
               "openai" if key else "OPENAI_API_KEY is empty")
         if key:
             _probe_openai(key)
+    elif provider == "openrouter":
+        key = os.environ.get("OPENROUTER_API_KEY", "")
+        check("llm provider", OK if key else FAIL,
+              "openrouter" if key else "OPENROUTER_API_KEY is empty")
+        if key:
+            _probe_openrouter(key)
     else:
         check("llm provider", FAIL,
-              f"unknown LLM_PROVIDER={provider!r} (mock | anthropic | openai)")
+              f"unknown LLM_PROVIDER={provider!r} "
+              "(mock | anthropic | openai | openrouter)")
 
     endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "")
     if endpoint:
@@ -96,6 +103,17 @@ def main() -> int:
     except Exception as e:
         check("profile/defects config", FAIL, str(e))
 
+    from app import budget
+    if not config.STAND_KEYS_REQUIRED:
+        check("student keys", OK, "off — spending routes are open (STAND_KEYS_REQUIRED=0)")
+    elif budget.unpriced_models():
+        check("student keys", FAIL,
+              "no price in app/agent/pricing.py for " + ", ".join(budget.unpriced_models()))
+    else:
+        check("student keys", OK,
+              f"on — {len(budget.all_keys())} keys, defaults "
+              f"${config.STAND_KEY_DAILY_USD:g}/24h, ${config.STAND_KEY_MONTHLY_USD:g}/30d")
+
     width = max(len(n) for n, _, _ in results) + 2
     worst = OK
     for name, status, detail in results:
@@ -116,13 +134,15 @@ def _probe_anthropic(key: str):
         import time
 
         import httpx
+
+        from app.agent.providers.anthropic_provider import DEFAULT_MODEL
         # A balance top-up can take a moment to propagate, so a single 400 is
         # not proof the key is unusable: retry briefly before reporting.
         for attempt in range(3):
             r = httpx.post("https://api.anthropic.com/v1/messages",
                            headers={"x-api-key": key,
                                     "anthropic-version": "2023-06-01"},
-                           json={"model": "claude-haiku-4-5", "max_tokens": 1,
+                           json={"model": config.LLM_MODEL or DEFAULT_MODEL, "max_tokens": 1,
                                  "messages": [{"role": "user",
                                                "content": "ping"}]},
                            timeout=15)
@@ -156,6 +176,18 @@ def _probe_openai(key: str):
               f"HTTP {r.status_code}")
     except Exception as e:
         check("openai api reachable", FAIL, str(e))
+
+
+def _probe_openrouter(key: str):
+    try:
+        import httpx
+        r = httpx.get("https://openrouter.ai/api/v1/key",
+                      headers={"Authorization": f"Bearer {key}"}, timeout=15)
+        hint = " — the key is invalid or revoked" if r.status_code == 401 else ""
+        check("openrouter api reachable", OK if r.status_code == 200 else FAIL,
+              f"HTTP {r.status_code}{hint}")
+    except Exception as e:
+        check("openrouter api reachable", FAIL, str(e))
 
 
 if __name__ == "__main__":

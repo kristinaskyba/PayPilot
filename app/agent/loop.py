@@ -1,13 +1,16 @@
 ""
 import json
 import uuid
+from contextlib import contextmanager
+from contextvars import ContextVar
 
-from app import config, defects
-from app.agent import prompt, summarize, tools
+from app import budget, config, defects, session_ctx
+from app.agent import language, pricing, prompt, router, summarize, tools
 from app.agent.providers.base import get_provider
 from app.tracing import RequestTrace
 
-_sessions: dict[str, dict] = {}
+_sessions: dict[tuple[str, str], dict] = {}
+_owner: ContextVar[str] = ContextVar("session_owner", default="")
 
 _EMPTY_RETRY_LIMIT = 8
 
@@ -23,12 +26,25 @@ def _is_empty_result(result: dict) -> bool:
 
 def _session(session_id: str | None) -> tuple[str, dict]:
     sid = session_id or uuid.uuid4().hex[:12]
-    state = _sessions.setdefault(sid, {"messages": [], "steps": 0})
+    state = _sessions.setdefault((_owner.get(), sid), {"messages": [], "steps": 0})
     return sid, state
 
 
-def reset_sessions() -> None:
-    _sessions.clear()
+@contextmanager
+def owned_by(owner: str):
+    token = _owner.set(owner)
+    try:
+        yield
+    finally:
+        _owner.reset(token)
+
+
+def reset_sessions(owner: str | None = None) -> None:
+    if owner is None:
+        _sessions.clear()
+        return
+    for k in [k for k in _sessions if k[0] == owner]:
+        del _sessions[k]
 
 
 def _messages_for_model(state: dict) -> list[dict]:
@@ -46,14 +62,33 @@ def _messages_for_model(state: dict) -> list[dict]:
     return messages
 
 
-def run_turn(session_id: str | None, user_message: str) -> dict:
+class SessionCustomerConflict(Exception):
+    def __init__(self, bound: str):
+        super().__init__(f"session belongs to {bound}; start a new session")
+        self.bound = bound
+
+
+def run_turn(session_id: str | None, user_message: str,
+             customer_id: str | None = None) -> dict:
     sid, state = _session(session_id)
+    if state["steps"] == 0:
+        state["customer_id"] = customer_id
+    elif customer_id and customer_id != state.get("customer_id"):
+        raise SessionCustomerConflict(state.get("customer_id") or "no customer")
+    with session_ctx.bind(state.get("customer_id")):
+        return _run_turn(sid, state, user_message)
+
+
+def _run_turn(sid: str, state: dict, user_message: str) -> dict:
     state["steps"] += 1
     trace = RequestTrace(sid, state["steps"])
     provider = get_provider()
     system, prompt_version = prompt.build()
+    system, reply_language = language.apply(system, user_message)
     trace.root.attributes["prompt.version"] = prompt_version
+    trace.root.attributes["reply.language_detected"] = reply_language or ""
     trace.root.attributes["llm.provider"] = provider.name
+    trace.root.attributes["session.customer_id"] = session_ctx.current() or ""
     trace.root.attributes["context.replay_active"] = (
         defects.is_on("D15") and any(m["role"] == "tool" for m in state["messages"]))
 
@@ -71,6 +106,11 @@ def run_turn(session_id: str | None, user_message: str) -> dict:
     state["messages"].append({"role": "user", "content": user_message})
     answer = None
     total_in = total_out = 0
+    model = getattr(provider, "model", "")
+    call_costs: list[float | None] = []
+    system, router_cost = _route(trace, state, system, user_message)
+    if router_cost is not None:
+        call_costs.append(router_cost)
 
     for step in range(config.MAX_AGENT_STEPS):
         with trace.span("llm.call", **{"agent.loop_step": step}) as s:
@@ -83,6 +123,9 @@ def run_turn(session_id: str | None, user_message: str) -> dict:
             })
         total_in += resp.input_tokens
         total_out += resp.output_tokens
+        model = resp.model or model
+        call_costs.append(pricing.cost_usd(resp.model or model, resp.input_tokens,
+                                           resp.output_tokens))
 
         if not resp.tool_calls:
             answer = resp.text or ""
@@ -110,8 +153,34 @@ def run_turn(session_id: str | None, user_message: str) -> dict:
     tree = trace.finish()
     return {"session_id": sid, "request_id": tree["request_id"],
             "answer": answer, "step_number": state["steps"],
+            "prompt_version": prompt_version,
             "elapsed_ms": tree.get("duration_ms"),
-            "usage": {"input_tokens": total_in, "output_tokens": total_out}}
+            "usage": {"input_tokens": total_in, "output_tokens": total_out,
+                      "model": model,
+                      "cost_usd": pricing.total_cost_usd(call_costs)}}
+
+
+def _route(trace: RequestTrace, state: dict, system: str,
+           user_message: str) -> tuple[str, float | None]:
+    if state["steps"] != 1 or not router.active_for(defects.current_profile()):
+        return system, None
+    jev = router.get_router()
+    if jev is None:
+        return system, None
+    with trace.span("router.jev") as s:
+        decision = jev.decide(user_message)
+        system, block = router.apply(system, decision)
+        s.attributes.update({
+            "router.model": decision.model,
+            "router.intent": decision.intent or "",
+            "router.confidence": round(decision.confidence, 3),
+            "router.action": decision.action,
+            "router.latency_ms": decision.latency_ms,
+            "router.added_instructions": block,
+            "router.error": decision.error,
+        })
+    budget.charge(decision.model, decision.input_tokens, 0)
+    return system, pricing.cost_usd(decision.model, decision.input_tokens, 0)
 
 
 def _execute_tool(trace: RequestTrace, tc: dict) -> dict:
@@ -125,8 +194,10 @@ def _execute_tool(trace: RequestTrace, tc: dict) -> dict:
             s.attributes.update({
                 "retrieval.query": tc["arguments"].get("query"),
                 "retrieval.index": result.get("index"),
+                "retrieval.top_k": result.get("top_k"),
                 "retrieval.fragments": [
-                    {"id": f["id"], "score": f["score"]}
+                    {"id": f["id"], "score": f["score"],
+                     "text": (f.get("text") or "")[:160]}
                     for f in result.get("fragments", [])],
             })
     return result
