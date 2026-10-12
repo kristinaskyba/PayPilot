@@ -1,27 +1,26 @@
-# Residual risk: L03 golden set
+# Residual risk analysis — Golden dataset L03
 
-Set: `golden.jsonl`, 34 cases, `set_hash` 0cdf2f682dad. Daily gate 29 cases, release gate 5 (human tone cases).
+Set: `golden.jsonl`, `set_hash` 0cdf2f682dad. Mandate: Ship it (from L02, Quality Bar Proposal).
 
-## Coverage matrix
+## 1. Coverage matrix
+| Layer | Corpus / RAG | Rule engines | Memory | Tools |
+| --- | --- | --- | --- | --- |
+| Retrieval | not covered | not covered | not covered | not covered |
+| Generation | CMP-004, CMP-006, NEG-C10 | CMP-003, FX-002…FX-011 (with -S pairs), LIM-001, DIS-001, DIS-002-N, DIS-C11, DIS-C12; tone (release): TON-001…TON-005 | not covered | not covered |
+| Action | not covered | not covered | not covered | LIM-003, DIS-006, DIS-007 (tool result computed by the engine) |
 
-| Layer | Engine oracle | Corpus oracle | Human oracle |
+## 2. What the set does not catch
+| What is not covered | What happens if it breaks | Defer or accept | Why we live with it now |
 | --- | --- | --- | --- |
-| action (tool called with right result) | 3 cases (L1 flag, L2 numeric) | - | - |
-| generation (what the bot says) | 23 cases (L2 numeric, L3 contains, L4 must-not-say) | 3 cases (L3, L4) | 5 cases (L7 judge, release gate) |
-| retrieval | not covered | not covered | not covered |
-| memory | not covered | not covered | not covered |
+| Tone and wording of the answer | The customer gets a cold or off-tone answer; money and rules are not affected. The prompt change ("always begin with an apology") touched only 1 of 29 cases (FX-003-S) | accept | The 5 human-oracle cases (TON-001…TON-005) sit in the release gate; the judge arrives at L09 |
+| Document retrieval (C-13, C-14) | The bot returns a wrong figure from the documents, or half an answer, and the set does not see it | defer to L04 | The set has no retrieval-layer cases; L04 will add them |
+| Memory in a long conversation (C-18) | The bot loses an amount stated at the start of the chat and the set stays silent | defer to L05 | The set has no multi-turn cases that check memory |
 
-Daily gate: 29 cases. Ladder levels used: 1, 2, 3, 4, 7. Severity: 6 critical, 25 high, 2 medium, 1 low.
+Complaints outside the set: C-02 (customer not logged in, general question, nothing to reproduce), C-15 (mobile app freeze, not the bot), C-20 (review without name, date or answer text). C-16 is covered by the human case TON-003.
 
-## Failure classes and decisions
-
-1. **Tone and wording changes.** Evidence: the prompt-change run (apology line) was seen by only 1 of 29 cases (FX-003-S, a "contains" check). Numbers and "must not say" checks cannot see tone. Decision: **accept** for the daily gate. The 5 human tone cases in the release gate cover it, and a judge on every daily run costs more than the risk is worth.
-2. **Complaints that could not be turned into a case** (C-02, C-15, C-20). C-02 has no customer and no question we can replay, C-20 has no name, date or answer text, and C-15 is a mobile app freeze, not the bot. Without something to replay there is no oracle. Decision: **defer** C-02 and C-20 until more detail arrives; C-15 is **accepted** here as out of scope for the bot (passed to the app team).
-3. **Retrieval and memory failures** (C-13, C-14 retrieval; C-18 memory). The set has no cases on these layers. Decision: **defer** to L04 (retrieval) and L05 (memory).
-
-## Size and cost
-
-- Daily run: 29 cases x 1 run = 29 bot calls, about 145,000 tokens and about 100 s (clean run: 144,710 tokens, 96.5 s).
-- Release run: adds 5 human cases x 5 runs = 25 judged runs, so it is slower and costs more. Run it before a release, not on every change.
-- Sensitivity: the prompt-change test moved 1 of 29 cases (FX-003-S); the defective profile moved 15 of 29. The set is sensitive to wrong numbers and wrong rules, and much less to phrasing.
-- Single runs: each daily case runs once, so a lone failure like FX-003-S can be noise. A control re-run (as done here) is the cheap way to check.
+## 3. Set size
+Cost of one run: calls: 29 `daily` cases × 1 run = 29 · tokens: 144,710 (sum of the `tokens` column in `golden-clean-20261009T174227.json`) · price: claude-haiku-4-5, $1 / 1M input and $5 / 1M output = about $0.17.
+The report gives only the total token count, so the split is assumed to be 95.5% input and 4.5% output, as measured in L02 (309,895 : 14,777): 138,100 × $1/1M + 6,600 × $5/1M ≈ $0.138 + $0.033.
+Formula from section 7 of the Quality Bar Proposal (L02): `cost = calls × average tokens per call × price per token`
+Sensitivity: the prompt change altered the result on 1 case of 29 (FX-003-S); the defective profile lesson-03 altered 15 of 29.
+Under the opposite mandate this would change: tone would move into the daily run instead of the release gate, and the "accept" decision for tone would become "defer" until there is a judge (L09).
